@@ -5,6 +5,12 @@ param (
     [string]$LogFile = "MergeLog.txt"
 )
 
+# Initialize Counters
+$Global:OldWins = 0
+$Global:NewWins = 0
+$Global:UniqueFiles = 0
+$Global:FolderCount = 0
+
 # Resolve full path for CombinedDir
 $CombinedDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($CombinedDir)
 
@@ -13,7 +19,7 @@ if (!(Test-Path $CombinedDir)) {
 }
 
 $FullLogPath = Join-Path $CombinedDir $LogFile
-"--- Merge (Newest File Wins) Started at $(Get-Date) ---" | Out-File -FilePath $FullLogPath
+"--- Merge Started at $(Get-Date) ---" | Out-File -FilePath $FullLogPath
 
 # Helper function to log to file AND display in console
 function Write-Log {
@@ -24,10 +30,7 @@ function Write-Log {
     $Timestamp = Get-Date -Format "HH:mm:ss"
     $LogEntry = "$Timestamp : $Message"
     
-    # Save to file
     $LogEntry | Out-File -FilePath $FullLogPath -Append
-    
-    # Write to console
     Write-Host $LogEntry -ForegroundColor $Color
 }
 
@@ -43,6 +46,7 @@ function Sync-Directories {
     if (!(Test-Path $CurrentDest)) { 
         New-Item -ItemType Directory -Path $CurrentDest | Out-Null
         Write-Log "Created Folder: $RelativePath" -Color Yellow
+        $Global:FolderCount++
     }
 
     $OldItems = if (Test-Path $SourceDir) { Get-ChildItem -Path $SourceDir } else { @() }
@@ -59,23 +63,27 @@ function Sync-Directories {
         $RelativeFilePath = Join-Path $RelativePath $FileName
 
         if ($FileInOld -and $FileInNew) {
-            # CONFLICT: Compare dates
+            # CONFLICT: Keep newest
             if ($FileInOld.LastWriteTime -gt $FileInNew.LastWriteTime) {
                 Copy-Item $FileInOld.FullName -Destination (Join-Path $CurrentDest $FileName) -Force
-                Write-Log "CONFLICT: Kept OLD version of $FileName (Newer date)" -Color Cyan
+                Write-Log "CONFLICT: Kept OLD version of $FileName (Newer)" -Color Cyan
+                $Global:OldWins++
             }
             else {
                 Copy-Item $FileInNew.FullName -Destination (Join-Path $CurrentDest $FileName) -Force
-                Write-Log "CONFLICT: Kept NEW version of $FileName (Newer date)" -Color Cyan
+                Write-Log "CONFLICT: Kept NEW version of $FileName (Newer)" -Color Cyan
+                $Global:NewWins++
             }
         }
         elseif ($FileInOld) {
             Copy-Item $FileInOld.FullName -Destination (Join-Path $CurrentDest $FileName)
             Write-Log "UNIQUE (Old): $RelativeFilePath" -Color Green
+            $Global:UniqueFiles++
         }
         else {
             Copy-Item $FileInNew.FullName -Destination (Join-Path $CurrentDest $FileName)
             Write-Log "UNIQUE (New): $RelativeFilePath" -Color Green
+            $Global:UniqueFiles++
         }
     }
 
@@ -92,14 +100,26 @@ function Sync-Directories {
     }
 }
 
-# START EXECUTION
-Write-Host "Starting merge... Results will be in: $CombinedDir" -ForegroundColor Gray
+# EXECUTION BLOCK
+Write-Host "`nStarting Merge Operation..." -ForegroundColor Gray
 Write-Host "------------------------------------------------------------"
 
 try {
     Sync-Directories -SourceDir $OldDir -TargetDir $NewDir
-    Write-Log "--- Merge Completed Successfully ---" -Color White
+    
+    # Final Summary
+    $Summary = @"
+
+--- MERGE SUMMARY ---
+Folders Created: $Global:FolderCount
+Unique Files Copied: $Global:UniqueFiles
+Conflicts Resolved (Old Won): $Global:OldWins
+Conflicts Resolved (New Won): $Global:NewWins
+Total Actions: $($Global:FolderCount + $Global:UniqueFiles + $Global:OldWins + $Global:NewWins)
+---------------------
+"@
+    Write-Log $Summary -Color Magenta
 }
 catch {
-    Write-Log "ERROR: $($_.Exception.Message)" -Color Red
+    Write-Log "FATAL ERROR: $($_.Exception.Message)" -Color Red
 }
