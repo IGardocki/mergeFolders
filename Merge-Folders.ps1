@@ -14,12 +14,21 @@ if (!(Test-Path $CombinedDir)) {
 
 $FullLogPath = Join-Path $CombinedDir $LogFile
 "--- Merge (Newest File Wins) Started at $(Get-Date) ---" | Out-File -FilePath $FullLogPath
-Write-Host "Logging to: $FullLogPath" -ForegroundColor Yellow
 
+# Helper function to log to file AND display in console
 function Write-Log {
-    param ($Message)
-    $Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    "$Timestamp : $Message" | Out-File -FilePath $FullLogPath -Append
+    param (
+        [string]$Message,
+        [ConsoleColor]$Color = "White"
+    )
+    $Timestamp = Get-Date -Format "HH:mm:ss"
+    $LogEntry = "$Timestamp : $Message"
+    
+    # Save to file
+    $LogEntry | Out-File -FilePath $FullLogPath -Append
+    
+    # Write to console
+    Write-Host $LogEntry -ForegroundColor $Color
 }
 
 function Sync-Directories {
@@ -30,9 +39,10 @@ function Sync-Directories {
     )
 
     $CurrentDest = Join-Path $CombinedDir $RelativePath
+    
     if (!(Test-Path $CurrentDest)) { 
         New-Item -ItemType Directory -Path $CurrentDest | Out-Null
-        Write-Log "Created Folder: $RelativePath"
+        Write-Log "Created Folder: $RelativePath" -Color Yellow
     }
 
     $OldItems = if (Test-Path $SourceDir) { Get-ChildItem -Path $SourceDir } else { @() }
@@ -49,23 +59,23 @@ function Sync-Directories {
         $RelativeFilePath = Join-Path $RelativePath $FileName
 
         if ($FileInOld -and $FileInNew) {
-            # CONFLICT: Compare Modification Dates
+            # CONFLICT: Compare dates
             if ($FileInOld.LastWriteTime -gt $FileInNew.LastWriteTime) {
                 Copy-Item $FileInOld.FullName -Destination (Join-Path $CurrentDest $FileName) -Force
-                Write-Log "CONFLICT: Kept OLD version of $FileName (Modified: $($FileInOld.LastWriteTime))"
+                Write-Log "CONFLICT: Kept OLD version of $FileName (Newer date)" -Color Cyan
             }
             else {
                 Copy-Item $FileInNew.FullName -Destination (Join-Path $CurrentDest $FileName) -Force
-                Write-Log "CONFLICT: Kept NEW version of $FileName (Modified: $($FileInNew.LastWriteTime))"
+                Write-Log "CONFLICT: Kept NEW version of $FileName (Newer date)" -Color Cyan
             }
         }
         elseif ($FileInOld) {
             Copy-Item $FileInOld.FullName -Destination (Join-Path $CurrentDest $FileName)
-            Write-Log "UNIQUE (Old): Copied $RelativeFilePath"
+            Write-Log "UNIQUE (Old): $RelativeFilePath" -Color Green
         }
         else {
             Copy-Item $FileInNew.FullName -Destination (Join-Path $CurrentDest $FileName)
-            Write-Log "UNIQUE (New): Copied $RelativeFilePath"
+            Write-Log "UNIQUE (New): $RelativeFilePath" -Color Green
         }
     }
 
@@ -82,12 +92,14 @@ function Sync-Directories {
     }
 }
 
+# START EXECUTION
+Write-Host "Starting merge... Results will be in: $CombinedDir" -ForegroundColor Gray
+Write-Host "------------------------------------------------------------"
+
 try {
     Sync-Directories -SourceDir $OldDir -TargetDir $NewDir
-    Write-Log "--- Merge Completed Successfully ---"
-    Write-Host "Sync Complete! Result in: $CombinedDir" -ForegroundColor Cyan
+    Write-Log "--- Merge Completed Successfully ---" -Color White
 }
 catch {
-    Write-Log "ERROR: $($_.Exception.Message)"
-    Write-Host "An error occurred. Check the log." -ForegroundColor Red
+    Write-Log "ERROR: $($_.Exception.Message)" -Color Red
 }
