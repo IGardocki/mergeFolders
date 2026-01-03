@@ -1,58 +1,48 @@
 param (
     [Parameter(Mandatory=$true)] [string]$OldDir,
     [Parameter(Mandatory=$true)] [string]$NewDir,
-    [string]$CombinedDir = "CombinedDir",
-    [string]$LogFile = "MergeLog.txt"
+    [string]$CombinedFolderName = "CombinedDir"
 )
 
-# Initialize Counters
-$Global:OldWins = 0
-$Global:NewWins = 0
-$Global:UniqueFiles = 0
-$Global:FolderCount = 0
+# 1. Setup Paths properly
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+if ([string]::IsNullOrWhiteSpace($ScriptDir)) { $ScriptDir = Get-Location }
+$CombinedDir = "$ScriptDir\$CombinedFolderName"
 
-# Resolve full path for CombinedDir
-$CombinedDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($CombinedDir)
-
-if (!(Test-Path $CombinedDir)) { 
-    New-Item -ItemType Directory -Path $CombinedDir | Out-Null 
+# 2. Create Combined Directory if it doesn't exist
+if (!(Test-Path -Path "$CombinedDir")) { 
+    New-Item -ItemType Directory -Path "$CombinedDir" -Force | Out-Null 
 }
 
-$FullLogPath = Join-Path $CombinedDir $LogFile
-"--- Merge Started at $(Get-Date) ---" | Out-File -FilePath $FullLogPath
+$LogFile = "$CombinedDir\MergeLog.txt"
+"--- Merge Started at $(Get-Date) ---" | Out-File -FilePath $LogFile
 
-# Helper function to log to file AND display in console
 function Write-Log {
-    param (
-        [string]$Message,
-        [ConsoleColor]$Color = "White"
-    )
+    param ([string]$Message, [ConsoleColor]$Color = "White")
     $Timestamp = Get-Date -Format "HH:mm:ss"
     $LogEntry = "$Timestamp : $Message"
-    
-    $LogEntry | Out-File -FilePath $FullLogPath -Append
+    $LogEntry | Out-File -FilePath $LogFile -Append
     Write-Host $LogEntry -ForegroundColor $Color
 }
 
 function Sync-Directories {
-    param (
-        $SourceDir, 
-        $TargetDir, 
-        $RelativePath = ""
-    )
-
-    $CurrentDest = Join-Path $CombinedDir $RelativePath
+    param ($SourceDir, $TargetDir, $RelativePath)
     
-    if (!(Test-Path $CurrentDest)) { 
-        New-Item -ItemType Directory -Path $CurrentDest | Out-Null
+    # Don't use Join-Path for the base folder to avoid the 'empty string' error
+    if ([string]::IsNullOrWhiteSpace($RelativePath)) {
+        $CurrentDest = $CombinedDir
+    } else {
+        $CurrentDest = "$CombinedDir\$RelativePath"
+    }
+    
+    if (!(Test-Path -Path "$CurrentDest")) { 
+        New-Item -ItemType Directory -Path "$CurrentDest" -Force | Out-Null
         Write-Log "Created Folder: $RelativePath" -Color Yellow
-        $Global:FolderCount++
     }
 
-    $OldItems = if (Test-Path $SourceDir) { Get-ChildItem -Path $SourceDir } else { @() }
-    $NewItems = if (Test-Path $TargetDir) { Get-ChildItem -Path $TargetDir } else { @() }
+    $OldItems = if (Test-Path -Path "$SourceDir") { Get-ChildItem -Path "$SourceDir" } else { @() }
+    $NewItems = if (Test-Path -Path "$TargetDir") { Get-ChildItem -Path "$TargetDir" } else { @() }
 
-    # --- 1. PROCESS FILES ---
     $OldFiles = $OldItems | Where-Object { !$_.PSIsContainer }
     $NewFiles = $NewItems | Where-Object { !$_.PSIsContainer }
     $AllFileNames = ($OldFiles.Name + $NewFiles.Name) | Select-Object -Unique
@@ -60,66 +50,41 @@ function Sync-Directories {
     foreach ($FileName in $AllFileNames) {
         $FileInOld = $OldFiles | Where-Object { $_.Name -eq $FileName }
         $FileInNew = $NewFiles | Where-Object { $_.Name -eq $FileName }
-        $RelativeFilePath = Join-Path $RelativePath $FileName
+        $DestFilePath = "$CurrentDest\$FileName"
 
         if ($FileInOld -and $FileInNew) {
-            # CONFLICT: Keep newest
             if ($FileInOld.LastWriteTime -gt $FileInNew.LastWriteTime) {
-                Copy-Item $FileInOld.FullName -Destination (Join-Path $CurrentDest $FileName) -Force
-                Write-Log "CONFLICT: Kept OLD version of $FileName (Newer)" -Color Cyan
-                $Global:OldWins++
+                Copy-Item -Path "$($FileInOld.FullName)" -Destination "$DestFilePath" -Force
+                Write-Log "CONFLICT: Kept OLD version of $FileName" -Color Cyan
+            } else {
+                Copy-Item -Path "$($FileInNew.FullName)" -Destination "$DestFilePath" -Force
+                Write-Log "CONFLICT: Kept NEW version of $FileName" -Color Cyan
             }
-            else {
-                Copy-Item $FileInNew.FullName -Destination (Join-Path $CurrentDest $FileName) -Force
-                Write-Log "CONFLICT: Kept NEW version of $FileName (Newer)" -Color Cyan
-                $Global:NewWins++
-            }
-        }
-        elseif ($FileInOld) {
-            Copy-Item $FileInOld.FullName -Destination (Join-Path $CurrentDest $FileName)
-            Write-Log "UNIQUE (Old): $RelativeFilePath" -Color Green
-            $Global:UniqueFiles++
-        }
-        else {
-            Copy-Item $FileInNew.FullName -Destination (Join-Path $CurrentDest $FileName)
-            Write-Log "UNIQUE (New): $RelativeFilePath" -Color Green
-            $Global:UniqueFiles++
+        } elseif ($FileInOld) {
+            Copy-Item -Path "$($FileInOld.FullName)" -Destination "$DestFilePath" -Force
+            Write-Log "UNIQUE (Old): $FileName" -Color Green
+        } else {
+            Copy-Item -Path "$($FileInNew.FullName)" -Destination "$DestFilePath" -Force
+            Write-Log "UNIQUE (New): $FileName" -Color Green
         }
     }
 
-    # --- 2. PROCESS SUBDIRECTORIES (Recursion) ---
+    # Handle Subdirectories
     $OldSubDirs = $OldItems | Where-Object { $_.PSIsContainer }
     $NewSubDirs = $NewItems | Where-Object { $_.PSIsContainer }
     $AllSubDirNames = ($OldSubDirs.Name + $NewSubDirs.Name) | Select-Object -Unique
-
     foreach ($SubDirName in $AllSubDirNames) {
-        Sync-Directories `
-            -SourceDir (Join-Path $SourceDir $SubDirName) `
-            -TargetDir (Join-Path $TargetDir $SubDirName) `
-            -RelativePath (Join-Path $RelativePath $SubDirName)
+        $NextRelative = if ([string]::IsNullOrWhiteSpace($RelativePath)) { $SubDirName } else { "$RelativePath\$SubDirName" }
+        Sync-Directories -SourceDir "$SourceDir\$SubDirName" -TargetDir "$TargetDir\$SubDirName" -RelativePath $NextRelative
     }
 }
 
-# EXECUTION BLOCK
-Write-Host "`nStarting Merge Operation..." -ForegroundColor Gray
-Write-Host "------------------------------------------------------------"
-
 try {
-    Sync-Directories -SourceDir $OldDir -TargetDir $NewDir
-    
-    # Final Summary
-    $Summary = @"
-
---- MERGE SUMMARY ---
-Folders Created: $Global:FolderCount
-Unique Files Copied: $Global:UniqueFiles
-Conflicts Resolved (Old Won): $Global:OldWins
-Conflicts Resolved (New Won): $Global:NewWins
-Total Actions: $($Global:FolderCount + $Global:UniqueFiles + $Global:OldWins + $Global:NewWins)
----------------------
-"@
-    Write-Log $Summary -Color Magenta
-}
-catch {
+    Write-Log "Starting Merge..." -Color White
+    # Pass an explicit empty string for the first RelativePath
+    Sync-Directories -SourceDir "$OldDir" -TargetDir "$NewDir" -RelativePath ""
+    Write-Host "`n--- FINISHED ---" -ForegroundColor Magenta
+    explorer.exe "$CombinedDir"
+} catch {
     Write-Log "FATAL ERROR: $($_.Exception.Message)" -Color Red
 }
