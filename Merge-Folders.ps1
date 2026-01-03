@@ -1,13 +1,19 @@
 param (
     [Parameter(Mandatory=$true)] [string]$OldDir,
     [Parameter(Mandatory=$true)] [string]$NewDir,
+    [string]$ParentPath,
     [string]$CombinedFolderName = "CombinedDir"
 )
 
 # 1. Setup Paths properly
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-if ([string]::IsNullOrWhiteSpace($ScriptDir)) { $ScriptDir = Get-Location }
-$CombinedDir = "$ScriptDir\$CombinedFolderName"
+# If no ParentPath was provided, default to where the script is located
+if ([string]::IsNullOrWhiteSpace($ParentPath)) {
+    $ParentPath = Split-Path -Parent $MyInvocation.MyCommand.Definition
+    if ([string]::IsNullOrWhiteSpace($ParentPath)) { $ParentPath = Get-Location }
+}
+
+# Combine the chosen parent directory with the chosen name
+$CombinedDir = "$ParentPath\$CombinedFolderName"
 
 # 2. Create Combined Directory if it doesn't exist
 if (!(Test-Path -Path "$CombinedDir")) { 
@@ -28,7 +34,6 @@ function Write-Log {
 function Sync-Directories {
     param ($SourceDir, $TargetDir, $RelativePath)
     
-    # Don't use Join-Path for the base folder to avoid the 'empty string' error
     if ([string]::IsNullOrWhiteSpace($RelativePath)) {
         $CurrentDest = $CombinedDir
     } else {
@@ -69,7 +74,6 @@ function Sync-Directories {
         }
     }
 
-    # Handle Subdirectories
     $OldSubDirs = $OldItems | Where-Object { $_.PSIsContainer }
     $NewSubDirs = $NewItems | Where-Object { $_.PSIsContainer }
     $AllSubDirNames = ($OldSubDirs.Name + $NewSubDirs.Name) | Select-Object -Unique
@@ -81,7 +85,6 @@ function Sync-Directories {
 
 try {
     Write-Log "Starting Merge..." -Color White
-    # Pass an explicit empty string for the first RelativePath
     Sync-Directories -SourceDir "$OldDir" -TargetDir "$NewDir" -RelativePath ""
     Write-Host "`n--- FINISHED ---" -ForegroundColor Magenta
     explorer.exe "$CombinedDir"
